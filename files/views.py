@@ -12,6 +12,10 @@ from django.http import HttpResponse
 import requests
 from rest_framework.permissions import IsAuthenticated
 
+def generate_simple_url(s3_key):
+    s3_url = f"https://{settings.AWS_STORAGE_BUCKET_NAME}.s3.amazonaws.com/{s3_key}"
+    simple_url = requests.get(f"https://ks0bm06q4a.execute-api.us-west-2.amazonaws.com/dev?long_url={s3_url}").json()
+    return "https://simple-url.skdev.one/"+simple_url['short_url']
 
 class FileUploadView(APIView):
     parser_classes = (MultiPartParser, FormParser)
@@ -49,17 +53,19 @@ class FileUploadView(APIView):
             'size': file_obj.size,
             'tier': tier
         }
-        s3_url = f"https://{settings.AWS_STORAGE_BUCKET_NAME}.s3.amazonaws.com/{s3_key}"
-        simple_url = requests.get(f"https://ks0bm06q4a.execute-api.us-west-2.amazonaws.com/dev?long_url={s3_url}").json()
-        print(simple_url)
-        simple_url = "https://simple-url.skdev.one/"+simple_url['short_url']
+        # s3_url = f"https://{settings.AWS_STORAGE_BUCKET_NAME}.s3.amazonaws.com/{s3_key}"
+        # simple_url = requests.get(f"https://ks0bm06q4a.execute-api.us-west-2.amazonaws.com/dev?long_url={s3_url}").json()
+        # print(simple_url)
+        # simple_url = "https://simple-url.skdev.one/"+simple_url['short_url']
+        simple_url = generate_simple_url(s3_key)
 
         uploaded_file = UploadedFile.objects.create(
             file_name=file_obj.name,
             user=user,
             s3_key=s3_key,
             metadata=file_metadata,
-            simple_url=simple_url
+            simple_url=simple_url,
+            upload_complete="complete"
         )
 
         return Response({'message': 'File uploaded successfully', 'file': UploadedFileSerializer(uploaded_file).data})
@@ -72,7 +78,7 @@ class FileViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         # user = get_user_model().objects.get(email="rsumit123@gmail.com")
         # print(self.request.user)
-        return self.queryset.filter(user=self.request.user)
+        return self.queryset.filter(user=self.request.user, upload_complete="complete")
 
     @action(detail=False, methods=['get'])
     def list_files(self, request):
@@ -217,10 +223,45 @@ class GeneratePresignedUrlView(APIView):
         if not file_name:
             return Response({"error": "File name parameter is missing."}, status=400)
 
+        # Check if there's existing metadata and use it, or create a placeholder
+        file_metadata = request.query_params.get('metadata', {"tier": "standard"})
+
+        user = request.user
+
+        username = user.email.split('@')[0]+"-"+user.email.split('@')[1].split('.')[0]
+
+        s3_key = f"{username}/{file_name}"
+
         # Generate a pre-signed URL for put operations
         presigned_url = s3_client.generate_presigned_url('put_object',
                                                          Params={'Bucket': bucket_name,
-                                                                 'Key': file_name},
+                                                                 'Key': s3_key},
                                                          ExpiresIn=3600)  # or any duration
 
-        return Response({"presigned_url": presigned_url, "file_name": file_name})
+        # Create a temporary record
+        uploaded_file = UploadedFile.objects.create(
+            file_name=file_name,
+            user=request.user,
+            s3_key=s3_key,
+            metadata=file_metadata,
+            simple_url='',  # Placeholder, can be updated once the file is actually uploaded
+            upload_complete="pending"  # New field to track completion status
+        )
+
+        return Response({"presigned_url": presigned_url, "file_name": s3_key, "temp_id": uploaded_file.id})
+
+# You would need to add `upload_complete` field to your model to track the status.
+   
+def check_pending_uploads():
+    s3_client = boto3.client('s3', aws_access_key_id=settings.AWS_ACCESS_KEY_ID, aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY, region_name=settings.AWS_S3_REGION_NAME)
+    pending_files = UploadedFile.objects.filter(upload_complete="pending")
+
+    for file in pending_files:
+        try:
+            response = s3_client.head_object(Bucket=settings.AWS_STORAGE_BUCKET_NAME, Key=file.s3_key)
+            if response['ResponseMetadata']['HTTPStatusCode'] == 200:
+                file.upload_complete = "complete"
+                file.simple_url = generate_simple_url(file.s3_key)
+                file.save()
+        except s3_client.exceptions.ClientError as e:
+            continue  # handle logging or retry logic
