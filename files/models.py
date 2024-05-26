@@ -10,3 +10,6 @@ class UploadedFile(models.Model):
     s3_key = models.CharField(max_length=255, unique=True)  # Stores the S3 key for the file
     metadata = models.JSONField(null=True, blank=True)  # Stores additional metadata
     simple_url = models.URLField(null=True, blank=True)  # Stores the simple URL for the file
+
+    def __str__(self):
+        return self.file_name

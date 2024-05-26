@@ -250,18 +250,3 @@ class GeneratePresignedUrlView(APIView):
 
         return Response({"presigned_url": presigned_url, "file_name": s3_key, "temp_id": uploaded_file.id})
 
-# You would need to add `upload_complete` field to your model to track the status.
-   
-def check_pending_uploads():
-    s3_client = boto3.client('s3', aws_access_key_id=settings.AWS_ACCESS_KEY_ID, aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY, region_name=settings.AWS_S3_REGION_NAME)
-    pending_files = UploadedFile.objects.filter(upload_complete="pending")
-
-    for file in pending_files:
-        try:
-            response = s3_client.head_object(Bucket=settings.AWS_STORAGE_BUCKET_NAME, Key=file.s3_key)
-            if response['ResponseMetadata']['HTTPStatusCode'] == 200:
-                file.upload_complete = "complete"
-                file.simple_url = generate_simple_url(file.s3_key)
-                file.save()
-        except s3_client.exceptions.ClientError as e:
-            continue  # handle logging or retry logic
