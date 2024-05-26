@@ -10,6 +10,7 @@ from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser
 from django.http import HttpResponse
 import requests
+from rest_framework.permissions import IsAuthenticated
 
 
 class FileUploadView(APIView):
@@ -200,3 +201,26 @@ class FileViewSet(viewsets.ModelViewSet):
         except Exception as e:
             print(f"Error refreshing file metadata from S3: {e}")
             return Response({'error': str(e)}, status=500)
+
+
+class GeneratePresignedUrlView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        s3_client = boto3.client('s3',
+                                  aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+                                  aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+                                  region_name=settings.AWS_S3_REGION_NAME)
+        file_name = request.query_params.get('file_name')
+        bucket_name = settings.AWS_STORAGE_BUCKET_NAME
+
+        if not file_name:
+            return Response({"error": "File name parameter is missing."}, status=400)
+
+        # Generate a pre-signed URL for put operations
+        presigned_url = s3_client.generate_presigned_url('put_object',
+                                                         Params={'Bucket': bucket_name,
+                                                                 'Key': file_name},
+                                                         ExpiresIn=3600)  # or any duration
+
+        return Response({"presigned_url": presigned_url, "file_name": file_name})
